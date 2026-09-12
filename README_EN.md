@@ -14,7 +14,8 @@ Built on .NET 8 (WinForms) + ffmpeg lossless concat (`-c copy`, no re-encoding) 
 - 📈 **Incremental updates**: a hidden manifest in the output folder tracks merged episodes; after new downloads, re-run to append and rename (`EP1-10` → `EP1-12`); the old file is cleaned up automatically
 - 📁 **Multi-folder support**: keep old episodes and new downloads in separate folders — add and check them all, the tool scans across folders
 - 🗂️ **Batch mode**: one root folder with one subfolder per drama — merge everything in one go into a single output folder
-- 🛡️ **Safety checks**: duplicate episode numbers, non-contiguous episodes, modified source files — all reported clearly before anything happens
+- 🛡️ **Safety checks**: duplicate episode numbers, non-contiguous episodes — all reported clearly before anything happens
+- 🧹 **Deletable sources**: once merged, the original episode files can be deleted — incremental updates only rely on the episode numbers tracked in the manifest, new episodes still append in order
 - 📊 **Real progress**: total duration read via ffprobe drives the progress bar; merging can be canceled at any time
 
 ## 📦 Getting Started
@@ -78,7 +79,7 @@ Requires the .NET 8 SDK ([download](https://dotnet.microsoft.com/download/dotnet
 ## ⚙️ How it works
 
 1. **Scan**: `Directory.EnumerateFiles` + regex episode parsing, numeric sort, deduped across all checked folders
-2. **Plan**: reads the merge manifest (`.merge-manifest-<drama>.json`) in the output folder, compares current files, and decides between full merge / incremental append / up-to-date / missing episodes / source changed
+2. **Plan**: reads the merged-episode numbers tracked in the manifest (`.merge-manifest-<drama>.json`) in the output folder and compares them with the freshly scanned episodes, deciding between full merge / incremental append / up-to-date / missing episodes. Deleted source files never block appending; only losing the merged output itself falls back to a full merge
 3. **Merge**: writes an ffmpeg concat list → `ffmpeg -f concat -safe 0 -c copy -movflags +faststart` → writes to a temp file first, then atomically replaces the output
 4. **Manifest update**: records merged file names and sizes for the next incremental run
 
@@ -91,6 +92,9 @@ No. `-c copy` copies the video/audio streams as-is; only the container is rewrit
 
 **Q: What is the manifest file? Can I delete it?**
 `.merge-manifest-<drama>.json` in the output folder tracks what has been merged. Deleting it just forces a full re-merge — no data is lost.
+
+**Q: Can I delete the original episode files after merging?**
+Yes. Incremental updates only rely on the episode numbers recorded in the manifest, so deleted sources never block future appends (keep the merged `EP1-X.mp4` file — new episodes are appended to it).
 
 **Q: "Missing episode X" warning?**
 Episodes must be contiguous to guarantee watch order. Add the missing file and retry.

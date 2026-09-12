@@ -45,7 +45,7 @@ public sealed class MergeManifest
     public int MergedCount => MergedFiles.Count;
 }
 
-public enum PlanKind { FullMerge, IncrementalMerge, UpToDate, NothingToMerge, MissingEpisodes, SourceChanged }
+public enum PlanKind { FullMerge, IncrementalMerge, UpToDate, NothingToMerge, MissingEpisodes }
 
 public sealed class MergePlan
 {
@@ -95,16 +95,6 @@ public static class Merger
     }
 
     /// <summary>按顺序在多个文件夹中查找清单记录的源文件名，返回第一个命中路径。</summary>
-    public static string? FindEpisodeFile(string fileName, IReadOnlyList<string> folders)
-    {
-        foreach (var folder in folders)
-        {
-            string p = Path.Combine(folder, fileName);
-            if (File.Exists(p)) return p;
-        }
-        return null;
-    }
-
     /// <summary>从文件名解析集数：匹配“第NN集”，找不到返回 0。</summary>
     public static int ParseEpisodeNumber(string fileNameNoExt)
         => Regex.Match(fileNameNoExt, @"第(\d{1,4})集") is { Success: true } m ? int.Parse(m.Groups[1].Value) : 0;
@@ -164,7 +154,7 @@ public static class Merger
     /// <summary>合并成功后更新清单（全新合并重建列表，增量合并追加）。</summary>
     public static void UpdateManifestAfterMerge(MergeManifest manifest, MergePlan plan)
     {
-        if (manifest.MergedFiles.Count == 0)
+        if (plan.Kind == PlanKind.FullMerge || manifest.MergedFiles.Count == 0)
         {
             manifest.MergedFiles = plan.EpisodesToMerge.Select(e => Path.GetFileName(e.FilePath)).ToList();
             manifest.MergedSizes = plan.EpisodesToMerge.Select(e => new FileInfo(e.FilePath).Length.ToString()).ToList();
@@ -206,19 +196,27 @@ public static class Merger
             };
         }
 
-        // 清单里的源文件必须都还在（在任一勾选文件夹中）且大小一致，否则要求重新合并
-        var files = manifest.MergedFiles.Zip(manifest.MergedSizes).ToList();
-        foreach (var (name, size) in files)
-        {
-            string? p = FindEpisodeFile(name, srcFolders);
-            if (p == null || new FileInfo(p).Length != long.Parse(size))
-                return new MergePlan { Kind = PlanKind.SourceChanged };
-        }
-        // 旧合并产物必须还在
-        if (manifest.OutputFile.Length > 0 && !File.Exists(Path.Combine(outputDir, manifest.OutputFile)))
-            return new MergePlan { Kind = PlanKind.SourceChanged };
+        // 已合并的源文件通常已被删除，增量只按集数判断：清单记录合并到第几集，
+        // 比它大的集数按顺序追加到现有合并文件末尾，源文件在不在不参与判断。
+        int firstEpisode = manifest.FirstEpisode > 0 ? manifest.FirstEpisode : 1;
+        int mergedMax = firstEpisode - 1 + manifest.MergedFiles.Count;
 
-        int mergedMax = files.Count;
+        // 追加靠把新集拼到旧合并产物末尾，产物不在了就只能退回全新合并（要求从第 1 集连续）
+        if (manifest.OutputFile.Length == 0 || !File.Exists(Path.Combine(outputDir, manifest.OutputFile)))
+        {
+            int first = episodes[0].Number;
+            if (first != 1)
+                return new MergePlan { Kind = PlanKind.MissingEpisodes, MissingFrom = 1, MissingTo = first - 1 };
+            return new MergePlan
+            {
+                Kind = PlanKind.FullMerge,
+                EpisodesToMerge = episodes,
+                OutputName = BuildOutputName(dramaName, episodes[0].Number, episodes[^1].Number),
+                NewMaxEpisode = episodes[^1].Number,
+                TotalBytes = episodes.Sum(e => new FileInfo(e.FilePath).Length),
+            };
+        }
+
         var newOnes = episodes.Where(e => e.Number > mergedMax).ToList();
 
         if (newOnes.Count == 0)
@@ -233,7 +231,6 @@ public static class Merger
                 MissingTo = newOnes[0].Number - 1,
             };
 
-        int firstEpisode = manifest.FirstEpisode > 0 ? manifest.FirstEpisode : 1;
         return new MergePlan
         {
             Kind = PlanKind.IncrementalMerge,
@@ -462,9 +459,9 @@ internal static class SelfTest
             Check(plan4.Kind == PlanKind.MissingEpisodes && plan4.MissingFrom == 5 && plan4.MissingTo == 5,
                 $"应检测到缺第5集，实际 Kind={plan4.Kind} From={plan4.MissingFrom} To={plan4.MissingTo} Eps=[{string.Join(',', Merger.ScanEpisodes(src).Select(e => e.Number))}] Merged={loaded!.MergedCount}");
 
-            // ---- 源文件被改动检测 ----
-            File.AppendAllText(Path.Combine(src, "测试剧 第01集.mp4"), "tamper");
-            Check(Merger.Plan(Merger.ScanEpisodes(src), loaded, new[] { src }, dst, "测试剧").Kind == PlanKind.SourceChanged, "源文件被改动应 SourceChanged");
+            // ---- 旧合并产物丢失：无法追加，退回全新合并（源仍从第 1 集连续）----
+            File.Delete(Path.Combine(dst, loaded!.OutputFile));
+            Check(Merger.Plan(Merger.ScanEpisodes(src), loaded, new[] { src }, dst, "测试剧").Kind == PlanKind.FullMerge, "合并产物丢失应退回全新合并");
 
             // ---- 批量模式：两部剧各一个文件夹，一次合并到统一输出目录 ----
             string batchRoot = Path.Combine(tmp, "batch");
@@ -538,8 +535,14 @@ internal static class SelfTest
             var multi2 = Merger.PlanDrama(new[] { oldFold, newFold, newFold2 }, multiOut);
             Check(multi2.Plan.Kind == PlanKind.IncrementalMerge && multi2.Plan.NewMaxEpisode == 6, "跨文件夹增量应识别第6集");
             Check(multi2.Plan.OutputName == "多夹剧 第1-6集.mp4", $"增量输出名 {multi2.Plan.OutputName}");
-            // 清单里的旧源文件应能跨文件夹找到（第1-3集在 old_eps，第4-5集在 new_eps）
-            Check(Merger.FindEpisodeFile("多夹剧 第01集.mp4", new[] { oldFold, newFold, newFold2 }) != null, "跨文件夹查找清单源文件");
+
+            // ---- 已合并的源文件被删除：不阻断增量，照常按集数追加 ----
+            foreach (var f in Directory.GetFiles(oldFold)) File.Delete(f);
+            foreach (var f in Directory.GetFiles(newFold)) File.Delete(f);
+            var multi3 = Merger.PlanDrama(new[] { oldFold, newFold, newFold2 }, multiOut);
+            Check(multi3.Plan.Kind == PlanKind.IncrementalMerge && multi3.Plan.NewMaxEpisode == 6,
+                $"源文件被删后仍应追加第6集，实际 Kind={multi3.Plan.Kind}");
+            Check(multi3.Plan.OldMaxEpisode == 5 && multi3.Plan.EpisodesToMerge.Count == 1, "源文件被删后增量范围应为第6集");
 
             Console.WriteLine("selftest OK");
             return true;
@@ -865,6 +868,7 @@ public class MainForm : Form
         }
         finally
         {
+            _progress.Style = ProgressBarStyle.Blocks; // 若处于 Marquee（未知时长）状态，恢复常规样式
             _btn.Enabled = true;
             _cancelBtn.Enabled = false;
             _cts?.Dispose();
@@ -887,13 +891,48 @@ public class MainForm : Form
             : plan.EpisodesToMerge.Select(e => e.FilePath).ToList();
 
         Log(L.LogStartMerge(dp.DramaName, ordered.Count, plan.OutputName));
-        double totalSeconds = ffprobe == null ? 0 : ordered.Sum(p => Merger.ProbeDuration(ffprobe, p) ?? 0);
+
+        // 逐集读取时长：既用于总进度估算，也用于实时显示当前正在拼接哪个文件。
+        // ffprobe 探测（尤其走 NAS）较慢，放后台线程并逐个刷新状态，避免界面无响应。
+        var durations = new double[ordered.Count];
+        SetStatus(L.StatusProbingStart);
+        await Task.Run(() =>
+        {
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                durations[i] = ffprobe == null ? 0 : Merger.ProbeDuration(ffprobe, ordered[i]) ?? 0;
+                BeginInvoke(() => SetStatus(L.StatusProbing(i + 1, ordered.Count, Path.GetFileName(ordered[i]))));
+            }
+        }, ct);
+        double totalSeconds = durations.Sum();
+        var cumEnd = new double[ordered.Count];
+        for (int i = 0; i < ordered.Count; i++) cumEnd[i] = (i > 0 ? cumEnd[i - 1] : 0) + durations[i];
+        bool knowDuration = totalSeconds > 0;
+        BeginInvoke(() =>
+        {
+            _progress.Style = knowDuration ? ProgressBarStyle.Blocks : ProgressBarStyle.Marquee;
+            _progress.MarqueeAnimationSpeed = 40;
+        });
 
         var (ok, err) = await Merger.MergeAsync(ordered, outPath, ffmpeg, seconds =>
         {
-            if (totalSeconds > 0 && seconds.HasValue)
-                BeginInvoke(() => _progress.Value = Math.Min(
-                    (int)((dramaIndex + seconds.Value / totalSeconds) / dramaCount * 100), 100));
+            if (!seconds.HasValue) return;
+            BeginInvoke(() =>
+            {
+                double t = Math.Max(0, seconds.Value);
+                // 由已处理时长定位当前拼到的文件（concat 按顺序处理）
+                int fi = knowDuration ? Array.FindIndex(cumEnd, c => t < c) : -1;
+                if (fi < 0) fi = ordered.Count - 1;
+                if (knowDuration)
+                    _progress.Value = Math.Min(
+                        (int)((dramaIndex + Math.Min(t, totalSeconds) / totalSeconds) / dramaCount * 100), 100);
+                SetStatus(knowDuration
+                    ? L.StatusMergingFile(dramaIndex + 1, dramaCount, dp.DramaName,
+                        fi + 1, ordered.Count, Path.GetFileName(ordered[fi]), FmtTime(t), FmtTime(totalSeconds))
+                    : L.StatusMergingFileNoTime(dramaIndex + 1, dramaCount, dp.DramaName,
+                        fi + 1, ordered.Count, Path.GetFileName(ordered[fi])));
+            });
         }, ct);
         if (!ok) return (false, err.Length > 0 ? err : L.MsgFfmpegExit(plan.OutputName));
 
@@ -914,6 +953,15 @@ public class MainForm : Form
 
     static string FmtSize(long bytes) =>
         bytes >= 1L << 30 ? $"{bytes / 1073741824.0:F2} GB" : $"{bytes / 1048576.0:F1} MB";
+
+    /// <summary>秒数格式化为 MM:SS / H:MM:SS。</summary>
+    static string FmtTime(double seconds)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+    }
 
     static string? FindInPath(string exe)
     {

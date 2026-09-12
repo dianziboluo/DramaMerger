@@ -70,9 +70,6 @@ internal static class L
         PlanKind.MissingEpisodes => IsZh
             ? $"  缺集：{dp.DramaName}（缺第 {dp.Plan.MissingFrom}-{dp.Plan.MissingTo} 集）"
             : $"  Missing episodes: {dp.DramaName} (missing ep {dp.Plan.MissingFrom}-{dp.Plan.MissingTo})",
-        PlanKind.SourceChanged => IsZh
-            ? $"  源有变动：{dp.DramaName}（已合并的源文件被改动，建议重合并）"
-            : $"  Source changed: {dp.DramaName} (merged source files were modified; re-merge recommended)",
         _ => IsZh ? $"  无剧集：{dp.DramaName}" : $"  No episodes: {dp.DramaName}",
     };
     public static string MsgNothingToMerge(bool anyUpToDate) => IsZh
@@ -84,6 +81,18 @@ internal static class L
     public static string StatusMerging(int i, int n, string name) => IsZh
         ? $"({i}/{n}) 正在合并：{name}…"
         : $"({i}/{n}) Merging: {name}…";
+    public static string StatusProbingStart => IsZh
+        ? "正在读取各集时长（用于进度估算）…"
+        : "Reading episode durations (for progress estimation)…";
+    public static string StatusProbing(int i, int n, string file) => IsZh
+        ? $"正在读取时长（{i}/{n}）：{file}"
+        : $"Reading durations ({i}/{n}): {file}";
+    public static string StatusMergingFile(int d, int n, string drama, int fi, int fc, string file, string done, string total) => IsZh
+        ? $"({d}/{n})《{drama}》正在拼接 {fi}/{fc}：{file} · 已处理 {done} / 共 {total}"
+        : $"({d}/{n}) \"{drama}\" concatenating {fi}/{fc}: {file} · {done} / {total}";
+    public static string StatusMergingFileNoTime(int d, int n, string drama, int fi, int fc, string file) => IsZh
+        ? $"({d}/{n})《{drama}》正在拼接 {fi}/{fc}：{file}"
+        : $"({d}/{n}) \"{drama}\" concatenating {fi}/{fc}: {file}";
     public static string LogFail(string name, string err) => IsZh ? $"✗ {name} 合并失败：{err}" : $"✗ {name} merge failed: {err}";
     public static string MsgDone(int ok, int failed, int total, bool batch, string dst, string firstOutput) => IsZh
         ? batch
