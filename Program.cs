@@ -382,11 +382,11 @@ internal static class SelfTest
             File.WriteAllText(Path.Combine(src, "poster.jpg"), "x");
 
             // ---- 集数解析与命名 ----
-            Check(Merger.ParseEpisodeNumber("被潜规则的女孩 第07集") == 7, "第07集 → 7");
+            Check(Merger.ParseEpisodeNumber("短剧A 第07集") == 7, "第07集 → 7");
             Check(Merger.ParseEpisodeNumber("剧 第123集") == 123, "第123集 → 123");
             Check(Merger.ParseEpisodeNumber("SP 特别篇") == 0, "无集数 → 0");
-            Check(Merger.GuessDramaName("被潜规则的女孩 第01集") == "被潜规则的女孩", "剧名推断");
-            Check(Merger.BuildOutputName("被潜规则的女孩", 1, 10) == "被潜规则的女孩 第1-10集.mp4", "命名模板 1-10");
+            Check(Merger.GuessDramaName("短剧A 第01集") == "短剧A", "剧名推断");
+            Check(Merger.BuildOutputName("短剧A", 1, 10) == "短剧A 第1-10集.mp4", "命名模板 1-10");
             Check(Merger.BuildOutputName("某剧", 5, 12) == "某剧 第5-12集.mp4", "命名模板 5-12");
 
             // ---- 扫描 ----

@@ -55,7 +55,7 @@ Check "Batch mode (each subfolder = one drama)", select the root folder, and mer
 
 | File name example | Parsed episode |
 |---|---|
-| `被潜规则的女孩 第07集.mp4` | 7 |
+| `短剧A 第07集.mp4` | 7 |
 | `Some Drama EP05.mp4` | 5 |
 | `Show Episode 12.mp4` | 12 |
 | `Special SP.mp4` (no number) | skipped |
