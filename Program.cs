@@ -902,7 +902,8 @@ public class MainForm : Form
             {
                 ct.ThrowIfCancellationRequested();
                 durations[i] = ffprobe == null ? 0 : Merger.ProbeDuration(ffprobe, ordered[i]) ?? 0;
-                BeginInvoke(() => SetStatus(L.StatusProbing(i + 1, ordered.Count, Path.GetFileName(ordered[i]))));
+                int idx = i; // BeginInvoke 异步执行，必须捕获快照，否则闭包读到自增后的 i 会越界
+                BeginInvoke(() => SetStatus(L.StatusProbing(idx + 1, ordered.Count, Path.GetFileName(ordered[idx]))));
             }
         }, ct);
         double totalSeconds = durations.Sum();
