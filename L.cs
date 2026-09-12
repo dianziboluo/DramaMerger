@@ -90,9 +90,6 @@ internal static class L
     public static string StatusMergingFile(int d, int n, string drama, int fi, int fc, string file, string done, string total) => IsZh
         ? $"({d}/{n})《{drama}》正在拼接 {fi}/{fc}：{file} · 已处理 {done} / 共 {total}"
         : $"({d}/{n}) \"{drama}\" concatenating {fi}/{fc}: {file} · {done} / {total}";
-    public static string StatusMergingFileNoTime(int d, int n, string drama, int fi, int fc, string file) => IsZh
-        ? $"({d}/{n})《{drama}》正在拼接 {fi}/{fc}：{file}"
-        : $"({d}/{n}) \"{drama}\" concatenating {fi}/{fc}: {file}";
     public static string LogFail(string name, string err) => IsZh ? $"✗ {name} 合并失败：{err}" : $"✗ {name} merge failed: {err}";
     public static string MsgDone(int ok, int failed, int total, bool batch, string dst, string firstOutput) => IsZh
         ? batch

@@ -94,7 +94,6 @@ public static class Merger
         return map.Select(kv => new Episode(kv.Key, kv.Value)).ToList();
     }
 
-    /// <summary>按顺序在多个文件夹中查找清单记录的源文件名，返回第一个命中路径。</summary>
     /// <summary>从文件名解析集数：匹配“第NN集”，找不到返回 0。</summary>
     public static int ParseEpisodeNumber(string fileNameNoExt)
         => Regex.Match(fileNameNoExt, @"第(\d{1,4})集") is { Success: true } m ? int.Parse(m.Groups[1].Value) : 0;
@@ -171,6 +170,22 @@ public static class Merger
         manifest.OutputFile = plan.OutputName;
     }
 
+    /// <summary>全新合并计划：要求集数从第 1 集开始连续。</summary>
+    static MergePlan PlanFullMerge(List<Episode> episodes, string dramaName)
+    {
+        int first = episodes[0].Number;
+        if (first != 1)
+            return new MergePlan { Kind = PlanKind.MissingEpisodes, MissingFrom = 1, MissingTo = first - 1 };
+        return new MergePlan
+        {
+            Kind = PlanKind.FullMerge,
+            EpisodesToMerge = episodes,
+            OutputName = BuildOutputName(dramaName, episodes[0].Number, episodes[^1].Number),
+            NewMaxEpisode = episodes[^1].Number,
+            TotalBytes = episodes.Sum(e => new FileInfo(e.FilePath).Length),
+        };
+    }
+
     /// <summary>
     /// 对比扫描结果和清单，决定行动方案。
     /// </summary>
@@ -181,41 +196,17 @@ public static class Merger
             return new MergePlan { Kind = PlanKind.NothingToMerge };
 
         if (manifest == null || manifest.MergedFiles.Count == 0)
-        {
-            // 全新合并：要求从第 1 集开始连续
-            int first = episodes[0].Number;
-            if (first != 1)
-                return new MergePlan { Kind = PlanKind.MissingEpisodes, MissingFrom = 1, MissingTo = first - 1 };
-            return new MergePlan
-            {
-                Kind = PlanKind.FullMerge,
-                EpisodesToMerge = episodes,
-                OutputName = BuildOutputName(dramaName, episodes[0].Number, episodes[^1].Number),
-                NewMaxEpisode = episodes[^1].Number,
-                TotalBytes = episodes.Sum(e => new FileInfo(e.FilePath).Length),
-            };
-        }
+            return PlanFullMerge(episodes, dramaName);
 
         // 已合并的源文件通常已被删除，增量只按集数判断：清单记录合并到第几集，
         // 比它大的集数按顺序追加到现有合并文件末尾，源文件在不在不参与判断。
+        // mergedMax 的计算假设清单从 FirstEpisode 起连续（程序自己写出的清单均满足）。
         int firstEpisode = manifest.FirstEpisode > 0 ? manifest.FirstEpisode : 1;
         int mergedMax = firstEpisode - 1 + manifest.MergedFiles.Count;
 
         // 追加靠把新集拼到旧合并产物末尾，产物不在了就只能退回全新合并（要求从第 1 集连续）
         if (manifest.OutputFile.Length == 0 || !File.Exists(Path.Combine(outputDir, manifest.OutputFile)))
-        {
-            int first = episodes[0].Number;
-            if (first != 1)
-                return new MergePlan { Kind = PlanKind.MissingEpisodes, MissingFrom = 1, MissingTo = first - 1 };
-            return new MergePlan
-            {
-                Kind = PlanKind.FullMerge,
-                EpisodesToMerge = episodes,
-                OutputName = BuildOutputName(dramaName, episodes[0].Number, episodes[^1].Number),
-                NewMaxEpisode = episodes[^1].Number,
-                TotalBytes = episodes.Sum(e => new FileInfo(e.FilePath).Length),
-            };
-        }
+            return PlanFullMerge(episodes, dramaName);
 
         var newOnes = episodes.Where(e => e.Number > mergedMax).ToList();
 
@@ -903,7 +894,11 @@ public class MainForm : Form
                 ct.ThrowIfCancellationRequested();
                 durations[i] = ffprobe == null ? 0 : Merger.ProbeDuration(ffprobe, ordered[i]) ?? 0;
                 int idx = i; // BeginInvoke 异步执行，必须捕获快照，否则闭包读到自增后的 i 会越界
-                BeginInvoke(() => SetStatus(L.StatusProbing(idx + 1, ordered.Count, Path.GetFileName(ordered[idx]))));
+                BeginInvoke(() =>
+                {
+                    if (ct.IsCancellationRequested) return; // 取消后不再覆盖“已取消”状态
+                    SetStatus(L.StatusProbing(idx + 1, ordered.Count, Path.GetFileName(ordered[idx])));
+                });
             }
         }, ct);
         double totalSeconds = durations.Sum();
@@ -921,18 +916,16 @@ public class MainForm : Form
             if (!seconds.HasValue) return;
             BeginInvoke(() =>
             {
+                if (ct.IsCancellationRequested) return; // 取消后不再覆盖“已取消”状态
+                if (!knowDuration) return; // 无时长信息时无法定位当前文件，靠跑马灯表示进行中，不刷新状态
                 double t = Math.Max(0, seconds.Value);
                 // 由已处理时长定位当前拼到的文件（concat 按顺序处理）
-                int fi = knowDuration ? Array.FindIndex(cumEnd, c => t < c) : -1;
+                int fi = Array.FindIndex(cumEnd, c => t < c);
                 if (fi < 0) fi = ordered.Count - 1;
-                if (knowDuration)
-                    _progress.Value = Math.Min(
-                        (int)((dramaIndex + Math.Min(t, totalSeconds) / totalSeconds) / dramaCount * 100), 100);
-                SetStatus(knowDuration
-                    ? L.StatusMergingFile(dramaIndex + 1, dramaCount, dp.DramaName,
-                        fi + 1, ordered.Count, Path.GetFileName(ordered[fi]), FmtTime(t), FmtTime(totalSeconds))
-                    : L.StatusMergingFileNoTime(dramaIndex + 1, dramaCount, dp.DramaName,
-                        fi + 1, ordered.Count, Path.GetFileName(ordered[fi])));
+                _progress.Value = Math.Min(
+                    (int)((dramaIndex + Math.Min(t, totalSeconds) / totalSeconds) / dramaCount * 100), 100);
+                SetStatus(L.StatusMergingFile(dramaIndex + 1, dramaCount, dp.DramaName,
+                    fi + 1, ordered.Count, Path.GetFileName(ordered[fi]), FmtTime(t), FmtTime(totalSeconds)));
             });
         }, ct);
         if (!ok) return (false, err.Length > 0 ? err : L.MsgFfmpegExit(plan.OutputName));
